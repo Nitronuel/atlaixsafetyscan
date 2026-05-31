@@ -1,0 +1,95 @@
+@import url("https://fonts.googleapis.com/css2?family=Roboto:wght@100;300;400;500;700;900&display=swap");
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@font-face {
+  font-family: "Geist";
+  src: url("../node_modules/geist/dist/fonts/geist-sans/Geist-Variable.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+:root {
+  --font-sans: "Roboto", "Geist", ui-sans-serif, system-ui, "Segoe UI", Arial, sans-serif;
+  --bg-main: #FAFEFB;
+  --bg-card: rgba(248, 254, 250, 0.82);
+  --text-light: #10131A;
+  --text-medium: #606978;
+  --text-dark: #98A1B1;
+  --border-color: #D7E8DC;
+  --primary-green: #3FA34D;
+  --primary-red: #E85D75;
+  --primary-yellow: #FFE66E;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-sans);
+  background:
+    radial-gradient(circle at 18% 6%, rgba(255, 255, 255, 0.96), transparent 28%),
+    radial-gradient(circle at 78% 14%, rgba(211, 239, 218, 0.24), transparent 22%),
+    linear-gradient(135deg, #FFFFFF 0%, #FAFEFB 56%, #F4FBF6 100%);
+  color: var(--text-light);
+  min-height: 100vh;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+button,
+input,
+select,
+textarea {
+  font-family: var(--font-sans);
+  letter-spacing: 0;
+}
+
+input,
+select,
+textarea {
+  background: rgba(255, 255, 255, 0.76) !important;
+  color: var(--text-light) !important;
+}
+
+.font-black,
+.font-extrabold {
+  font-weight: 800 !important;
+}
+
+.tracking-tight,
+.tracking-normal,
+.tracking-wide,
+.tracking-wider,
+.tracking-widest,
+[class*="tracking-["] {
+  letter-spacing: 0 !important;
+}
+
+.shadow-sm,
+.shadow-md,
+.shadow-xl,
+.shadow-2xl {
+  box-shadow: 10px 14px 36px rgba(73, 119, 88, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.78) !important;
+}
+
+button.bg-primary-green,
+.bg-primary-green {
+  background: linear-gradient(135deg, #3FA34D 0%, #2F8F42 100%) !important;
+  color: #FFFFFF !important;
+}
+
+.text-primary-green {
+  color: #2E7D3C !important;
+}
+
+.text-primary-red {
+  color: var(--primary-red) !important;
+}
+
+.safe-scan-summary-surface {
+  border: 1px solid rgba(215, 232, 220, 0.9);
+  background: rgba(255, 255, 255, 0.72) !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.78);
+}
