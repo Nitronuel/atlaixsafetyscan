@@ -201,6 +201,22 @@ const formatClusterSupplyShare = (cluster: any, totalSupply?: number | null) => 
     return formatReportedSupplyPercent(getSupplyPercentField(cluster));
 };
 
+const formatWalletGroupSupplyShare = (rows: InsightXWalletEntry[], totalSupply?: number | null, fallback?: unknown) => {
+    const supply = Number(totalSupply);
+    if (Number.isFinite(supply) && supply > 0) {
+        const balance = rows.reduce((total, row) => {
+            const value = getBalanceValue(row);
+            return Number.isFinite(value) && value > 0 ? total + value : total;
+        }, 0);
+
+        if (balance > 0 || rows.length > 0) {
+            return formatPercent((balance / supply) * 100);
+        }
+    }
+
+    return formatReportedSupplyPercent(fallback);
+};
+
 const collectClusterList = (data: any) => {
     if (!data) return [];
     if (Array.isArray(data)) return data;
@@ -752,14 +768,17 @@ const ManipulationPanel: React.FC<{
     const insiderRows = enrichWalletRows(insiders?.insiders || [], labels);
     const [tab, setTab] = useState<'bundlers' | 'snipers' | 'insiders'>('bundlers');
     const rows = tab === 'bundlers' ? bundlerRows : tab === 'snipers' ? sniperRows : insiderRows;
+    const bundlerSupply = formatWalletGroupSupplyShare(bundlerRows, totalSupply, bundlers?.total_bundlers_pct ?? overview?.bundlers_pct);
+    const sniperSupply = formatWalletGroupSupplyShare(sniperRows, totalSupply, snipers?.total_sniper_pct ?? overview?.snipers_pct);
+    const insiderSupply = formatWalletGroupSupplyShare(insiderRows, totalSupply, insiders?.total_insiders_pct ?? overview?.insiders_pct);
 
     return (
         <Card>
             <SectionHeader icon={<Radar size={19} />} title="Launch Manipulation Intelligence" eyebrow="Bundlers, snipers, insiders" />
             <div className="mb-5 grid gap-3 md:grid-cols-4">
-                <MetricCard label="Bundlers" value={formatPct(bundlers?.total_bundlers_pct ?? overview?.bundlers_pct)} detail={`${formatNumber(bundlerRows.length)} wallets involved`} />
-                <MetricCard label="Snipers" value={formatPct(snipers?.total_sniper_pct ?? overview?.snipers_pct)} detail={`${formatNumber(sniperRows.length)} wallets involved`} />
-                <MetricCard label="Insiders" value={formatPct(insiders?.total_insiders_pct ?? overview?.insiders_pct)} detail={`${formatNumber(insiderRows.length)} wallets involved`} />
+                <MetricCard label="Bundlers" value={bundlerSupply} detail={`${formatNumber(bundlerRows.length)} wallets involved`} />
+                <MetricCard label="Snipers" value={sniperSupply} detail={`${formatNumber(sniperRows.length)} wallets involved`} />
+                <MetricCard label="Insiders" value={insiderSupply} detail={`${formatNumber(insiderRows.length)} wallets involved`} />
                 <MetricCard label="Sniper sold fully" value={formatNumber(snipers?.count?.sold_fully)} detail="Early buyers fully exited" />
             </div>
             <div className="mb-4 flex flex-wrap gap-2">
