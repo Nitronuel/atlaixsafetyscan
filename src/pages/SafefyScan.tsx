@@ -217,6 +217,16 @@ const formatWalletGroupSupplyShare = (rows: InsightXWalletEntry[], totalSupply?:
     return formatReportedSupplyPercent(fallback);
 };
 
+const formatCreatorSupplyShare = (scanner: InsightXScannerResponse | null, fallback?: unknown) => {
+    const creatorBalance = Number(scanner?.results?.advanced?.creator?.balance);
+    const totalSupply = Number(scanner?.token?.total_supply);
+    if (Number.isFinite(creatorBalance) && creatorBalance >= 0 && Number.isFinite(totalSupply) && totalSupply > 0) {
+        return formatPercent((creatorBalance / totalSupply) * 100);
+    }
+
+    return formatReportedSupplyPercent(fallback);
+};
+
 const collectClusterList = (data: any) => {
     if (!data) return [];
     if (Array.isArray(data)) return data;
@@ -238,6 +248,35 @@ const getClusterMembers = (cluster: any) => Array.isArray(cluster?.members)
                     : [];
 
 const getMemberAddress = (member: any) => String(member?.address || member?.wallet || member || '').toLowerCase();
+
+const formatTotalClusterSupplyShare = (clusters: any, totalSupply?: number | null, fallback?: unknown) => {
+    const supply = Number(totalSupply);
+    if (Number.isFinite(supply) && supply > 0) {
+        const seen = new Set<string>();
+        const totalBalance = collectClusterList(clusters).reduce((clusterTotal: number, cluster: any) => {
+            const members = getClusterMembers(cluster);
+            const memberTotal = members.reduce((memberSum: number, member: any) => {
+                const address = getWalletAddressValue(member).toLowerCase();
+                if (address && seen.has(address)) return memberSum;
+                if (address) seen.add(address);
+
+                const balance = getBalanceValue(member);
+                return Number.isFinite(balance) && balance > 0 ? memberSum + balance : memberSum;
+            }, 0);
+
+            if (memberTotal > 0) return clusterTotal + memberTotal;
+
+            const clusterBalance = getClusterSupplyBalance(cluster);
+            return clusterBalance !== null ? clusterTotal + clusterBalance : clusterTotal;
+        }, 0);
+
+        if (totalBalance > 0) {
+            return formatPercent((totalBalance / supply) * 100);
+        }
+    }
+
+    return formatReportedSupplyPercent(fallback);
+};
 
 const labelMapFrom = (labels: InsightXLabel[] | null) => {
     const map = new Map<string, InsightXLabel>();
@@ -1560,8 +1599,8 @@ export const SafefyScan: React.FC = () => {
                                     </div>
                                 </div>
                                 <div className="grid gap-3 sm:grid-cols-2">
-                                    <MetricCard label="Cluster supply" value={formatPct(overview?.cluster_pct)} detail="Supply held by detected clusters" />
-                                    <MetricCard label="Dev holdings" value={formatPct(overview?.dev_pct)} detail="Creator/deployer exposure" />
+                                    <MetricCard label="Cluster supply" value={formatTotalClusterSupplyShare(clustersData, tokenTotalSupply, overview?.cluster_pct)} detail="Supply held by detected clusters" />
+                                    <MetricCard label="Dev holdings" value={formatCreatorSupplyShare(scanner, overview?.dev_pct)} detail="Creator/deployer exposure" />
                                 </div>
                                 <LiquidityLockSummary scanner={scanner} />
                             </div>
