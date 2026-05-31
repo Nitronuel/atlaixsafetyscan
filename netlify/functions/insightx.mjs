@@ -244,6 +244,11 @@ async function buildInsightXReport(network, address) {
 
 function functionSubpath(event) {
   const path = event.path || '';
+  const apiMarker = '/api/insightx';
+  if (path === apiMarker || path.startsWith(`${apiMarker}/`)) {
+    return path.slice(apiMarker.length) || '/';
+  }
+
   const marker = '/.netlify/functions/insightx';
   const index = path.indexOf(marker);
   if (index >= 0) {
