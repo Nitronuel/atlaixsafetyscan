@@ -11,7 +11,6 @@ import {
     Search,
     Shield,
     ShieldAlert,
-    Timer,
     Users,
     Wallet,
     XCircle
@@ -30,6 +29,7 @@ import {
     type InsightXScannerResponse,
     type InsightXSnipers,
     type InsightXWalletEntry,
+    type LiveTokenLiquidity,
     type SafefyScanReport
 } from '../services/SafefyScanService';
 
@@ -60,6 +60,17 @@ const formatCompact = (value: unknown) => {
     }).format(numeric);
 };
 
+const formatCurrencyCompact = (value: unknown) => {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return 'N/A';
+    return new Intl.NumberFormat('en-US', {
+        style: 'currency',
+        currency: 'USD',
+        notation: 'compact',
+        maximumFractionDigits: numeric >= 100 ? 2 : 4
+    }).format(numeric);
+};
+
 const shortenAddress = (value = '') => {
     if (!value) return 'N/A';
     return value.length > 14 ? `${value.slice(0, 6)}...${value.slice(-5)}` : value;
@@ -76,14 +87,16 @@ const formatAgeOrDate = (value: unknown) => {
     const numeric = Number(value);
     if (!Number.isFinite(numeric) || numeric <= 0) return 'Unknown';
 
-    if (numeric >= 1_000_000_000) return toDate(numeric);
+    const ageSeconds = numeric >= 1_000_000_000
+        ? Math.max(0, (Date.now() - (numeric < 10_000_000_000 ? numeric * 1000 : numeric)) / 1000)
+        : numeric;
 
-    const days = Math.floor(numeric / 86400);
+    const days = Math.floor(ageSeconds / 86400);
     if (days >= 1) return `${formatNumber(days)}d`;
-    const hours = Math.floor(numeric / 3600);
+    const hours = Math.floor(ageSeconds / 3600);
     if (hours >= 1) return `${formatNumber(hours)}h`;
-    const minutes = Math.floor(numeric / 60);
-    return minutes >= 1 ? `${formatNumber(minutes)}m` : `${formatNumber(numeric)}s`;
+    const minutes = Math.floor(ageSeconds / 60);
+    return minutes >= 1 ? `${formatNumber(minutes)}m` : `${formatNumber(ageSeconds)}s`;
 };
 
 const endpointTone = (status: InsightXEndpointResult['status']) => {
@@ -140,7 +153,7 @@ const StatusPill: React.FC<{ result?: InsightXEndpointResult; label?: string }> 
     </span>
 );
 
-const MetricCard: React.FC<{ label: string; value: string; detail?: string; tone?: string }> = ({ label, value, detail, tone = 'text-text-light' }) => (
+const MetricCard: React.FC<{ label: string; value: React.ReactNode; detail?: React.ReactNode; tone?: string }> = ({ label, value, detail, tone = 'text-text-light' }) => (
     <div className="rounded-2xl border border-border bg-card-hover/45 p-4">
         <div className="mb-2 text-[11px] font-black uppercase tracking-[0.16em] text-text-dark">{label}</div>
         <div className={`text-2xl font-black ${tone}`}>{value}</div>
@@ -162,6 +175,12 @@ const getSupplyPercentField = (entry: any) => entry?.percentage ?? entry?.pct ??
 const formatReportedSupplyPercent = (value: unknown, fallback = 'N/A') => {
     const numeric = Number(value);
     return Number.isFinite(numeric) ? formatPercent(numeric) : fallback;
+};
+
+const normalizePercentValue = (value: unknown) => {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return null;
+    return numeric > 0 && numeric <= 1 ? numeric * 100 : numeric;
 };
 
 const formatSupplyShare = (entry: any, totalSupply?: number | null) => {
@@ -217,6 +236,22 @@ const formatWalletGroupSupplyShare = (rows: InsightXWalletEntry[], totalSupply?:
     return formatReportedSupplyPercent(fallback);
 };
 
+const getWalletGroupSupplyBalance = (rows: InsightXWalletEntry[], totalSupply?: number | null, fallback?: unknown) => {
+    const balance = rows.reduce((total, row) => {
+        const value = getBalanceValue(row);
+        return Number.isFinite(value) && value > 0 ? total + value : total;
+    }, 0);
+    if (balance > 0) return balance;
+
+    const supply = Number(totalSupply);
+    const fallbackPercent = normalizePercentValue(fallback);
+    if (Number.isFinite(supply) && supply > 0 && fallbackPercent !== null) {
+        return (supply * fallbackPercent) / 100;
+    }
+
+    return null;
+};
+
 const formatCreatorSupplyShare = (scanner: InsightXScannerResponse | null, fallback?: unknown) => {
     const creatorBalance = Number(scanner?.results?.advanced?.creator?.balance);
     const totalSupply = Number(scanner?.token?.total_supply);
@@ -249,27 +284,40 @@ const getClusterMembers = (cluster: any) => Array.isArray(cluster?.members)
 
 const getMemberAddress = (member: any) => String(member?.address || member?.wallet || member || '').toLowerCase();
 
+const getTotalClusterSupplyBalance = (clusters: any, totalSupply?: number | null, fallback?: unknown) => {
+    const seen = new Set<string>();
+    const totalBalance = collectClusterList(clusters).reduce((clusterTotal: number, cluster: any) => {
+        const members = getClusterMembers(cluster);
+        const memberTotal = members.reduce((memberSum: number, member: any) => {
+            const address = getWalletAddressValue(member).toLowerCase();
+            if (address && seen.has(address)) return memberSum;
+            if (address) seen.add(address);
+
+            const balance = getBalanceValue(member);
+            return Number.isFinite(balance) && balance > 0 ? memberSum + balance : memberSum;
+        }, 0);
+
+        if (memberTotal > 0) return clusterTotal + memberTotal;
+
+        const clusterBalance = getClusterSupplyBalance(cluster);
+        return clusterBalance !== null ? clusterTotal + clusterBalance : clusterTotal;
+    }, 0);
+
+    if (totalBalance > 0) return totalBalance;
+
+    const supply = Number(totalSupply);
+    const fallbackPercent = normalizePercentValue(fallback);
+    if (Number.isFinite(supply) && supply > 0 && fallbackPercent !== null) {
+        return (supply * fallbackPercent) / 100;
+    }
+
+    return null;
+};
+
 const formatTotalClusterSupplyShare = (clusters: any, totalSupply?: number | null, fallback?: unknown) => {
     const supply = Number(totalSupply);
     if (Number.isFinite(supply) && supply > 0) {
-        const seen = new Set<string>();
-        const totalBalance = collectClusterList(clusters).reduce((clusterTotal: number, cluster: any) => {
-            const members = getClusterMembers(cluster);
-            const memberTotal = members.reduce((memberSum: number, member: any) => {
-                const address = getWalletAddressValue(member).toLowerCase();
-                if (address && seen.has(address)) return memberSum;
-                if (address) seen.add(address);
-
-                const balance = getBalanceValue(member);
-                return Number.isFinite(balance) && balance > 0 ? memberSum + balance : memberSum;
-            }, 0);
-
-            if (memberTotal > 0) return clusterTotal + memberTotal;
-
-            const clusterBalance = getClusterSupplyBalance(cluster);
-            return clusterBalance !== null ? clusterTotal + clusterBalance : clusterTotal;
-        }, 0);
-
+        const totalBalance = getTotalClusterSupplyBalance(clusters);
         if (totalBalance > 0) {
             return formatPercent((totalBalance / supply) * 100);
         }
@@ -662,6 +710,65 @@ const LiquidityLockSummary: React.FC<{ scanner: InsightXScannerResponse | null }
     );
 };
 
+const drainRiskTone = (value: number | null) => {
+    if (value === null) return 'border-border bg-card-hover/45 text-text-light';
+    if (value >= 100) return 'border-primary-red/30 bg-primary-red/10 text-primary-red';
+    if (value >= 50) return 'border-[#F59E0B]/30 bg-[#F59E0B]/10 text-[#B45309]';
+    return 'border-primary-green/25 bg-primary-green/10 text-primary-green';
+};
+
+const drainRiskLabel = (value: number | null) => {
+    if (value === null) return 'Liquidity unavailable';
+    if (value >= 100) return 'Cluster supply can exceed live liquidity';
+    if (value >= 50) return 'High liquidity pressure';
+    return 'Below live liquidity';
+};
+
+const DrainRiskSummary: React.FC<{
+    clusterBalance: number | null;
+    liquidity: LiveTokenLiquidity | null;
+    loading: boolean;
+    error: string | null;
+    className?: string;
+}> = ({ clusterBalance, liquidity, loading, error, className = '' }) => {
+    const liquidityDepth = liquidity?.tokenLiquidity ?? null;
+    const liquidityShare = clusterBalance !== null && liquidityDepth !== null && liquidityDepth > 0
+        ? (clusterBalance / liquidityDepth) * 100
+        : null;
+    const tone = drainRiskTone(liquidityShare);
+
+    return (
+        <div className={`rounded-2xl border p-4 ${tone} ${className}`}>
+            <div className="mb-3 flex items-center justify-between gap-3">
+                <div>
+                    <div className="text-[11px] font-black uppercase tracking-[0.16em]">Drain risk</div>
+                    <div className="mt-1 text-sm font-bold">{drainRiskLabel(liquidityShare)}</div>
+                </div>
+                {loading ? <Loader2 size={18} className="shrink-0 animate-spin" /> : null}
+            </div>
+            <div className="grid gap-3 sm:grid-cols-3">
+                <div>
+                    <div className="text-[10px] font-black uppercase tracking-[0.14em] opacity-70">Cluster held supply</div>
+                    <div className="mt-1 text-lg font-black text-text-light">{clusterBalance !== null ? formatCompact(clusterBalance) : 'N/A'}</div>
+                </div>
+                <div>
+                    <div className="text-[10px] font-black uppercase tracking-[0.14em] opacity-70">Live liquidity</div>
+                    <div className="mt-1 text-lg font-black text-text-light">{liquidityDepth !== null ? formatCompact(liquidityDepth) : 'N/A'}</div>
+                </div>
+                <div>
+                    <div className="text-[10px] font-black uppercase tracking-[0.14em] opacity-70">Liquidity held</div>
+                    <div className="mt-1 text-lg font-black text-text-light">{liquidityShare !== null ? formatPercent(liquidityShare) : 'N/A'}</div>
+                </div>
+            </div>
+            {error || loading || !liquidity ? (
+                <div className="mt-3 text-xs font-semibold leading-5 text-text-medium">
+                    {error || (loading ? 'Checking live pool depth...' : 'No live token-side liquidity was found for this token.')}
+                </div>
+            ) : null}
+        </div>
+    );
+};
+
 const WalletTable: React.FC<{ rows: InsightXWalletEntry[]; empty: string; totalSupply?: number | null }> = ({ rows, empty, totalSupply }) => {
     if (!rows.length) {
         return <EmptyBlock title="No wallet rows" body={empty} />;
@@ -701,7 +808,6 @@ const WalletTable: React.FC<{ rows: InsightXWalletEntry[]; empty: string; totalS
 const ScannerPanel: React.FC<{ scanner: InsightXScannerResponse | null; result?: InsightXEndpointResult<InsightXScannerResponse> }> = ({ scanner, result }) => {
     const advanced = scanner?.results?.advanced || {};
     const simple = scanner?.results?.simple;
-    const token = scanner?.token;
     const securityTone = (state: 'safe' | 'risk' | 'unknown') => {
         if (state === 'safe') return 'border-primary-green/20 bg-primary-green/10 text-primary-green';
         if (state === 'risk') return 'border-primary-red/25 bg-primary-red/10 text-primary-red';
@@ -736,57 +842,33 @@ const ScannerPanel: React.FC<{ scanner: InsightXScannerResponse | null; result?:
 
     return (
         <Card>
-            <SectionHeader icon={<Shield size={19} />} title="Security Scanner" eyebrow="Token contract and metadata" action={<StatusPill result={result} />} />
+            <SectionHeader icon={<Shield size={19} />} title="Security Scanner" eyebrow="Contract checks" action={<StatusPill result={result} />} />
             {!scanner ? (
                 <EmptyBlock title="Scanner unavailable" body={result?.error || 'No scanner report was returned for this token.'} />
             ) : (
-                <div className="grid gap-5 lg:grid-cols-[1fr_1.4fr]">
-                    <div className="rounded-2xl border border-border bg-card-hover/40 p-5">
-                        <div className="mb-4 flex items-center gap-3">
-                            <div className="grid h-14 w-14 place-items-center overflow-hidden rounded-full border border-border bg-card text-lg font-black text-primary-green">
-                                {token?.logo ? <img src={token.logo} alt="" className="h-full w-full object-cover" /> : (token?.symbol || 'IX').slice(0, 2)}
+                <div className="space-y-4">
+                    {simple?.reasons?.length ? (
+                        <div className="rounded-2xl border border-border bg-card-hover/40 p-4">
+                            <div className="mb-3 text-[11px] font-black uppercase tracking-[0.16em] text-text-dark">Score reasons</div>
+                            <div className="grid gap-2">
+                                {simple.reasons.slice(0, 6).map((reason) => (
+                                    <div key={reason} className="flex gap-2 text-sm font-semibold text-text-medium">
+                                        <Info size={16} className="mt-0.5 shrink-0 text-primary-green" />
+                                        <span>{reason}</span>
+                                    </div>
+                                ))}
                             </div>
-                            <div className="min-w-0">
-                                <div className="truncate text-xl font-black text-text-light">{token?.name || 'Unknown token'}</div>
-                                <div className="font-semibold text-text-medium">{token?.symbol || 'N/A'}</div>
+                        </div>
+                    ) : null}
+                    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                        {flags.map(([label, value, state]) => (
+                            <div key={String(label)} className="flex items-center justify-between gap-3 rounded-xl border border-border bg-card-hover/35 px-3 py-3">
+                                <span className="min-w-0 truncate text-sm font-bold text-text-medium">{label}</span>
+                                <span className={`shrink-0 rounded-full border px-2.5 py-1 text-[10px] font-black uppercase ${securityTone(state as 'safe' | 'risk' | 'unknown')}`}>
+                                    {String(value)}
+                                </span>
                             </div>
-                        </div>
-                        <div className={`mb-4 rounded-2xl border p-4 ${riskTone(Number(simple?.score ?? NaN))}`}>
-                            <div className="text-[11px] font-black uppercase tracking-[0.16em]">Safety Score</div>
-                            <div className="mt-2 text-4xl font-black">{simple?.score ?? 'N/A'}</div>
-                            <div className="mt-1 text-sm font-bold">{simple?.message || riskLabel(Number(simple?.score ?? NaN))}</div>
-                        </div>
-                        <div className="grid gap-2 text-sm">
-                            <div className="flex justify-between gap-3"><span className="text-text-medium">Supply</span><span className="font-black text-text-light">{formatCompact(token?.total_supply)}</span></div>
-                            <div className="flex justify-between gap-3"><span className="text-text-medium">Decimals</span><span className="font-black text-text-light">{token?.decimals ?? 'N/A'}</span></div>
-                            <div className="flex justify-between gap-3"><span className="text-text-medium">Age</span><span className="text-right font-black text-text-light">{formatAgeOrDate(token?.age)}</span></div>
-                            <div className="flex justify-between gap-3"><span className="text-text-medium">Holders</span><span className="font-black text-text-light">{formatNumber(advanced.holder_count)}</span></div>
-                        </div>
-                    </div>
-                    <div className="space-y-4">
-                        {simple?.reasons?.length ? (
-                            <div className="rounded-2xl border border-border bg-card-hover/40 p-4">
-                                <div className="mb-3 text-[11px] font-black uppercase tracking-[0.16em] text-text-dark">Score reasons</div>
-                                <div className="grid gap-2">
-                                    {simple.reasons.slice(0, 6).map((reason) => (
-                                        <div key={reason} className="flex gap-2 text-sm font-semibold text-text-medium">
-                                            <Info size={16} className="mt-0.5 shrink-0 text-primary-green" />
-                                            <span>{reason}</span>
-                                        </div>
-                                    ))}
-                                </div>
-                            </div>
-                        ) : null}
-                        <div className="grid gap-3 sm:grid-cols-2">
-                            {flags.map(([label, value, state]) => (
-                                <div key={String(label)} className="flex items-center justify-between gap-3 rounded-xl border border-border bg-card-hover/35 px-3 py-3">
-                                    <span className="min-w-0 truncate text-sm font-bold text-text-medium">{label}</span>
-                                    <span className={`shrink-0 rounded-full border px-2.5 py-1 text-[10px] font-black uppercase ${securityTone(state as 'safe' | 'risk' | 'unknown')}`}>
-                                        {String(value)}
-                                    </span>
-                                </div>
-                            ))}
-                        </div>
+                        ))}
                     </div>
                 </div>
             )}
@@ -801,7 +883,8 @@ const ManipulationPanel: React.FC<{
     insiders: InsightXInsiders | null;
     labels: Map<string, InsightXLabel>;
     totalSupply?: number | null;
-}> = ({ overview, snipers, bundlers, insiders, labels, totalSupply }) => {
+    tokenPriceUsd?: number | null;
+}> = ({ overview, snipers, bundlers, insiders, labels, totalSupply, tokenPriceUsd }) => {
     const sniperRows = enrichWalletRows(snipers?.snipers || [], labels);
     const bundlerRows = enrichWalletRows(bundlers?.bundlers || [], labels);
     const insiderRows = enrichWalletRows(insiders?.insiders || [], labels);
@@ -810,15 +893,21 @@ const ManipulationPanel: React.FC<{
     const bundlerSupply = formatWalletGroupSupplyShare(bundlerRows, totalSupply, bundlers?.total_bundlers_pct ?? overview?.bundlers_pct);
     const sniperSupply = formatWalletGroupSupplyShare(sniperRows, totalSupply, snipers?.total_sniper_pct ?? overview?.snipers_pct);
     const insiderSupply = formatWalletGroupSupplyShare(insiderRows, totalSupply, insiders?.total_insiders_pct ?? overview?.insiders_pct);
+    const priceUsd = Number(tokenPriceUsd);
+    const usdValue = (balance: number | null) => balance !== null && Number.isFinite(priceUsd) && priceUsd > 0
+        ? formatCurrencyCompact(balance * priceUsd)
+        : 'N/A';
+    const bundlerUsd = usdValue(getWalletGroupSupplyBalance(bundlerRows, totalSupply, bundlers?.total_bundlers_pct ?? overview?.bundlers_pct));
+    const sniperUsd = usdValue(getWalletGroupSupplyBalance(sniperRows, totalSupply, snipers?.total_sniper_pct ?? overview?.snipers_pct));
+    const insiderUsd = usdValue(getWalletGroupSupplyBalance(insiderRows, totalSupply, insiders?.total_insiders_pct ?? overview?.insiders_pct));
 
     return (
         <Card>
             <SectionHeader icon={<Radar size={19} />} title="Launch Manipulation Intelligence" eyebrow="Bundlers, snipers, insiders" />
-            <div className="mb-5 grid gap-3 md:grid-cols-4">
-                <MetricCard label="Bundlers" value={bundlerSupply} detail={`${formatNumber(bundlerRows.length)} wallets involved`} />
-                <MetricCard label="Snipers" value={sniperSupply} detail={`${formatNumber(sniperRows.length)} wallets involved`} />
-                <MetricCard label="Insiders" value={insiderSupply} detail={`${formatNumber(insiderRows.length)} wallets involved`} />
-                <MetricCard label="Sniper sold fully" value={formatNumber(snipers?.count?.sold_fully)} detail="Early buyers fully exited" />
+            <div className="mb-5 grid gap-3 md:grid-cols-3">
+                <MetricCard label="Bundlers" value={<><div>{bundlerSupply}</div><div className="mt-1 text-base font-black text-text-medium">{bundlerUsd}</div></>} detail={`${formatNumber(bundlerRows.length)} wallets involved`} />
+                <MetricCard label="Snipers" value={<><div>{sniperSupply}</div><div className="mt-1 text-base font-black text-text-medium">{sniperUsd}</div></>} detail={`${formatNumber(sniperRows.length)} wallets involved`} />
+                <MetricCard label="Insiders" value={<><div>{insiderSupply}</div><div className="mt-1 text-base font-black text-text-medium">{insiderUsd}</div></>} detail={`${formatNumber(insiderRows.length)} wallets involved`} />
             </div>
             <div className="mb-4 flex flex-wrap gap-2">
                 {(['bundlers', 'snipers', 'insiders'] as const).map((item) => (
@@ -1403,6 +1492,9 @@ export const SafefyScan: React.FC = () => {
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [report, setReport] = useState<SafefyScanReport | null>(null);
+    const [liveLiquidity, setLiveLiquidity] = useState<LiveTokenLiquidity | null>(null);
+    const [liquidityLoading, setLiquidityLoading] = useState(false);
+    const [liquidityError, setLiquidityError] = useState<string | null>(null);
 
     const normalizedAddress = address.trim();
     const addressSupported = !normalizedAddress || isLikelyInsightXAddress(normalizedAddress, network);
@@ -1419,6 +1511,41 @@ export const SafefyScan: React.FC = () => {
     const score = Number(scanner?.results?.simple?.score ?? NaN);
     const normalizedScore = Number.isFinite(score) ? score : null;
     const tokenTotalSupply = scanner?.token?.total_supply;
+    const clusterSupplyBalance = getTotalClusterSupplyBalance(clustersData, tokenTotalSupply, overview?.cluster_pct);
+    const clusterSupplyUsd = clusterSupplyBalance !== null && liveLiquidity?.tokenPriceUsd
+        ? clusterSupplyBalance * liveLiquidity.tokenPriceUsd
+        : null;
+
+    useEffect(() => {
+        if (!report) {
+            setLiveLiquidity(null);
+            setLiquidityError(null);
+            setLiquidityLoading(false);
+            return;
+        }
+
+        let cancelled = false;
+        setLiquidityLoading(true);
+        setLiquidityError(null);
+        setLiveLiquidity(null);
+
+        SafefyScanService.getLiveTokenLiquidity(report.network, report.address)
+            .then((liquidity) => {
+                if (!cancelled) setLiveLiquidity(liquidity);
+            })
+            .catch((nextError) => {
+                if (!cancelled) {
+                    setLiquidityError(nextError instanceof Error ? nextError.message : 'Live liquidity is unavailable.');
+                }
+            })
+            .finally(() => {
+                if (!cancelled) setLiquidityLoading(false);
+            });
+
+        return () => {
+            cancelled = true;
+        };
+    }, [report]);
 
     const handleScan = async (event?: React.FormEvent) => {
         event?.preventDefault();
@@ -1439,6 +1566,8 @@ export const SafefyScan: React.FC = () => {
     const reset = () => {
         setReport(null);
         setError(null);
+        setLiveLiquidity(null);
+        setLiquidityError(null);
         setAddress('');
         setNetwork('sol');
     };
@@ -1599,19 +1728,48 @@ export const SafefyScan: React.FC = () => {
                                     </div>
                                 </div>
                                 <div className="grid gap-3 sm:grid-cols-2">
-                                    <MetricCard label="Cluster supply" value={formatTotalClusterSupplyShare(clustersData, tokenTotalSupply, overview?.cluster_pct)} detail="Supply held by detected clusters" />
+                                    <MetricCard
+                                        label="Cluster supply"
+                                        value={(
+                                            <div>
+                                                <div>{formatTotalClusterSupplyShare(clustersData, tokenTotalSupply, overview?.cluster_pct)}</div>
+                                                <div className="mt-1 text-base font-black text-text-medium">{formatCurrencyCompact(clusterSupplyUsd)}</div>
+                                            </div>
+                                        )}
+                                        detail="Supply held by detected clusters"
+                                    />
                                     <MetricCard label="Dev holdings" value={formatCreatorSupplyShare(scanner, overview?.dev_pct)} detail="Creator/deployer exposure" />
                                 </div>
-                                <LiquidityLockSummary scanner={scanner} />
+                                <div className="grid gap-3 rounded-2xl border border-border bg-card-hover/35 p-4 sm:grid-cols-2 lg:grid-cols-4">
+                                    <div>
+                                        <div className="text-[11px] font-black uppercase tracking-[0.16em] text-text-dark">Supply</div>
+                                        <div className="mt-2 text-lg font-black text-text-light">{formatCompact(scanner?.token?.total_supply)}</div>
+                                    </div>
+                                    <div>
+                                        <div className="text-[11px] font-black uppercase tracking-[0.16em] text-text-dark">Decimals</div>
+                                        <div className="mt-2 text-lg font-black text-text-light">{scanner?.token?.decimals ?? 'N/A'}</div>
+                                    </div>
+                                    <div>
+                                        <div className="text-[11px] font-black uppercase tracking-[0.16em] text-text-dark">Token age</div>
+                                        <div className="mt-2 text-lg font-black text-text-light">{formatAgeOrDate(scanner?.token?.age)}</div>
+                                    </div>
+                                    <div>
+                                        <div className="text-[11px] font-black uppercase tracking-[0.16em] text-text-dark">Holders</div>
+                                        <div className="mt-2 text-lg font-black text-text-light">{formatNumber(scanner?.results?.advanced?.holder_count)}</div>
+                                    </div>
+                                </div>
                             </div>
                         </Card>
-                        <Card>
-                            <SectionHeader icon={<Timer size={19} />} title="Report Freshness" eyebrow="Request state" action={<button type="button" onClick={reset} className="min-h-10 rounded-full border border-border bg-card-hover px-4 text-sm font-black text-text-medium transition-colors hover:text-text-light">New scan</button>} />
-                            <div className="grid gap-3">
-                                <MetricCard label="Generated" value={new Date(report.generatedAt).toLocaleTimeString()} detail={new Date(report.generatedAt).toLocaleDateString()} />
-                                <MetricCard label="Network" value={getInsightXNetworkLabel(report.network)} detail="Selected scan network" />
-                            </div>
-                        </Card>
+                        <div className="grid gap-5">
+                            <LiquidityLockSummary scanner={scanner} />
+                            <DrainRiskSummary
+                                clusterBalance={clusterSupplyBalance}
+                                liquidity={liveLiquidity}
+                                loading={liquidityLoading}
+                                error={liquidityError}
+                                className="min-h-[280px]"
+                            />
+                        </div>
                     </div>
 
                     <div className="grid gap-5">
@@ -1619,7 +1777,7 @@ export const SafefyScan: React.FC = () => {
                     </div>
 
                     <LiquidityAndHoldersPanel scanner={scanner} labels={labelsByAddress} />
-                    <ManipulationPanel overview={overview} snipers={snipers} bundlers={bundlers} insiders={insiders} labels={labelsByAddress} totalSupply={tokenTotalSupply} />
+                    <ManipulationPanel overview={overview} snipers={snipers} bundlers={bundlers} insiders={insiders} labels={labelsByAddress} totalSupply={tokenTotalSupply} tokenPriceUsd={liveLiquidity?.tokenPriceUsd} />
                     <ClusterPanel clusters={clustersData} labels={labelsByAddress} totalSupply={tokenTotalSupply} />
                     <AtlasPanel atlas={atlas} timestamps={atlasTimestamps} clusters={clustersData} />
                 </>
