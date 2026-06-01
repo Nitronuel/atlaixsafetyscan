@@ -727,12 +727,20 @@ const drainRiskLabel = (value: number | null) => {
 
 const DrainRiskSummary: React.FC<{
     clusterBalance: number | null;
+    totalSupply?: number | null;
     liquidity: LiveTokenLiquidity | null;
     loading: boolean;
     error: string | null;
     className?: string;
-}> = ({ clusterBalance, liquidity, loading, error, className = '' }) => {
+}> = ({ clusterBalance, totalSupply, liquidity, loading, error, className = '' }) => {
     const liquidityDepth = liquidity?.tokenLiquidity ?? null;
+    const clusterSupplyShare = clusterBalance !== null && Number(totalSupply) > 0
+        ? (clusterBalance / Number(totalSupply)) * 100
+        : null;
+    const clusterValueUsd = clusterBalance !== null && liquidity?.tokenPriceUsd
+        ? clusterBalance * liquidity.tokenPriceUsd
+        : null;
+    const liquidityValueUsd = liquidity?.liquidityUsd ?? null;
     const liquidityShare = clusterBalance !== null && liquidityDepth !== null && liquidityDepth > 0
         ? (clusterBalance / liquidityDepth) * 100
         : null;
@@ -750,11 +758,12 @@ const DrainRiskSummary: React.FC<{
             <div className="grid gap-3 sm:grid-cols-3">
                 <div>
                     <div className="text-[10px] font-black uppercase tracking-[0.14em] opacity-70">Cluster held supply</div>
-                    <div className="mt-1 text-lg font-black text-text-light">{clusterBalance !== null ? formatCompact(clusterBalance) : 'N/A'}</div>
+                    <div className="mt-1 text-lg font-black text-text-light">{formatCurrencyCompact(clusterValueUsd)}</div>
+                    <div className="mt-1 text-xs font-black text-text-medium">{clusterSupplyShare !== null ? `${formatPercent(clusterSupplyShare)} of supply` : 'N/A of supply'}</div>
                 </div>
                 <div>
                     <div className="text-[10px] font-black uppercase tracking-[0.14em] opacity-70">Live liquidity</div>
-                    <div className="mt-1 text-lg font-black text-text-light">{liquidityDepth !== null ? formatCompact(liquidityDepth) : 'N/A'}</div>
+                    <div className="mt-1 text-lg font-black text-text-light">{formatCurrencyCompact(liquidityValueUsd)}</div>
                 </div>
                 <div>
                     <div className="text-[10px] font-black uppercase tracking-[0.14em] opacity-70">Liquidity held</div>
@@ -1808,6 +1817,7 @@ export const SafefyScan: React.FC = () => {
                             <LiquidityLockSummary scanner={scanner} />
                             <DrainRiskSummary
                                 clusterBalance={clusterSupplyBalance}
+                                totalSupply={tokenTotalSupply}
                                 liquidity={liveLiquidity}
                                 loading={liquidityLoading}
                                 error={liquidityError}
