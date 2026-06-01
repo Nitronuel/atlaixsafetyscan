@@ -927,9 +927,9 @@ const ManipulationPanel: React.FC<{
         <Card>
             <SectionHeader icon={<Radar size={19} />} title="Launch Manipulation Intelligence" eyebrow="Bundlers, snipers, insiders" />
             <div className="mb-5 grid gap-3 md:grid-cols-3">
-                <MetricCard label="Bundlers" value={<><div>{bundlerSupply}</div><div className="mt-1 text-base font-black text-text-medium">{bundlerUsd}</div></>} detail={`${formatNumber(bundlerRows.length)} wallets involved`} />
-                <MetricCard label="Snipers" value={<><div>{sniperSupply}</div><div className="mt-1 text-base font-black text-text-medium">{sniperUsd}</div></>} detail={`${formatNumber(sniperRows.length)} wallets involved`} />
-                <MetricCard label="Insiders" value={<><div>{insiderSupply}</div><div className="mt-1 text-base font-black text-text-medium">{insiderUsd}</div></>} detail={`${formatNumber(insiderRows.length)} wallets involved`} />
+                <MetricCard label="Bundlers" value={<><div>{bundlerSupply}</div><div className="mt-1 text-base font-black text-text-medium">{bundlerUsd}</div></>} detail={`${formatNumber(bundlerRows.length)} wallet interaction`} />
+                <MetricCard label="Snipers" value={<><div>{sniperSupply}</div><div className="mt-1 text-base font-black text-text-medium">{sniperUsd}</div></>} detail={`${formatNumber(sniperRows.length)} wallet interaction`} />
+                <MetricCard label="Insiders" value={<><div>{insiderSupply}</div><div className="mt-1 text-base font-black text-text-medium">{insiderUsd}</div></>} detail={`${formatNumber(insiderRows.length)} wallet interaction`} />
             </div>
             <div className="mb-4 flex flex-wrap gap-2">
                 {(['bundlers', 'snipers', 'insiders'] as const).map((item) => (
