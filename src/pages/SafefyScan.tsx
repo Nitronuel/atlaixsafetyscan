@@ -120,6 +120,18 @@ const riskLabel = (score: number | null) => {
     return 'High Risk';
 };
 
+const getDrainRiskPenalty = (clusterBalance: number | null, liquidity: LiveTokenLiquidity | null) => {
+    const liquidityDepth = Number(liquidity?.tokenLiquidity);
+    if (clusterBalance === null || !Number.isFinite(liquidityDepth) || liquidityDepth <= 0) return 0;
+
+    const liquidityShare = (clusterBalance / liquidityDepth) * 100;
+    if (liquidityShare >= 500) return 12;
+    if (liquidityShare >= 250) return 9;
+    if (liquidityShare >= 100) return 6;
+    if (liquidityShare >= 50) return 3;
+    return 0;
+};
+
 const Card: React.FC<{ children: React.ReactNode; className?: string }> = ({ children, className = '' }) => (
     <section className={`rounded-[24px] border border-border bg-card p-5 shadow-sm ${className}`}>
         {children}
@@ -1527,6 +1539,8 @@ export const SafefyScan: React.FC = () => {
     const clusterSupplyUsd = clusterSupplyBalance !== null && liveLiquidity?.tokenPriceUsd
         ? clusterSupplyBalance * liveLiquidity.tokenPriceUsd
         : null;
+    const drainRiskPenalty = getDrainRiskPenalty(clusterSupplyBalance, liveLiquidity);
+    const adjustedScore = normalizedScore !== null ? Math.max(0, normalizedScore - drainRiskPenalty) : null;
     useEffect(() => {
         if (!normalizedAddress || loading) {
             setDetectedNetwork(null);
@@ -1774,10 +1788,10 @@ export const SafefyScan: React.FC = () => {
                                             </div>
                                         </div>
                                     </div>
-                                    <div className={`min-w-[180px] rounded-2xl border p-4 text-center ${riskTone(normalizedScore)}`}>
+                                    <div className={`min-w-[180px] rounded-2xl border p-4 text-center ${riskTone(adjustedScore)}`}>
                                         <div className="text-[11px] font-black uppercase tracking-[0.18em]">Safety score</div>
-                                        <div className="mt-1 text-4xl font-black">{normalizedScore ?? 'N/A'}</div>
-                                        <div className="text-sm font-black">{riskLabel(normalizedScore)}</div>
+                                        <div className="mt-1 text-4xl font-black">{adjustedScore ?? 'N/A'}</div>
+                                        <div className="text-sm font-black">{riskLabel(adjustedScore)}</div>
                                     </div>
                                 </div>
                                 <div className="grid gap-3 sm:grid-cols-2">
