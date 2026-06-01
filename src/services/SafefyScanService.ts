@@ -139,6 +139,12 @@ export type LiveTokenLiquidity = {
     source: string;
 };
 
+export type DetectedTokenNetwork = {
+    network: InsightXNetwork;
+    confidence: 'high' | 'medium' | 'low';
+    source: string;
+};
+
 export const INSIGHTX_NETWORKS: Array<{ id: InsightXNetwork; label: string; family: 'Solana' | 'EVM' | 'Sui' }> = [
     { id: 'sol', label: 'Solana', family: 'Solana' },
     { id: 'eth', label: 'Ethereum', family: 'EVM' },
@@ -162,6 +168,10 @@ const DEXSCREENER_CHAIN_IDS: Partial<Record<InsightXNetwork, string>> = {
     abs: 'abstract',
     sui: 'sui'
 };
+
+const EVM_NETWORKS = INSIGHTX_NETWORKS
+    .filter((item) => item.family === 'EVM')
+    .map((item) => item.id);
 
 function apiUrl(path: string) {
     return APP_CONFIG.apiBaseUrl
@@ -210,6 +220,46 @@ export function getInsightXNetworkLabel(network: InsightXNetwork) {
     return INSIGHTX_NETWORKS.find((item) => item.id === network)?.label || network.toUpperCase();
 }
 
+async function getDexScreenerTokenPairs(network: InsightXNetwork, address: string) {
+    const chainId = DEXSCREENER_CHAIN_IDS[network];
+    if (!chainId) return [];
+
+    const response = await fetch(`https://api.dexscreener.com/token-pairs/v1/${encodeURIComponent(chainId)}/${encodeURIComponent(address.trim())}`);
+    if (!response.ok) return [];
+
+    const pairs = await response.json().catch(() => []);
+    return Array.isArray(pairs) ? pairs : [];
+}
+
+function summarizeDexScreenerPairs(pairs: any[], address: string) {
+    const normalizedAddress = address.trim().toLowerCase();
+    return pairs.reduce((acc, pair: any) => {
+        const liquidity = pair?.liquidity || {};
+        const liquidityUsd = Number(liquidity.usd);
+        const priceUsd = Number(pair?.priceUsd);
+        const baseAddress = String(pair?.baseToken?.address || '').toLowerCase();
+        const quoteAddress = String(pair?.quoteToken?.address || '').toLowerCase();
+        const tokenLiquidity = baseAddress === normalizedAddress
+            ? Number(liquidity.base)
+            : quoteAddress === normalizedAddress
+                ? Number(liquidity.quote)
+                : NaN;
+
+        if (Number.isFinite(tokenLiquidity) && tokenLiquidity > 0) {
+            acc.tokenLiquidity += tokenLiquidity;
+            acc.pairCount += 1;
+            if (Number.isFinite(priceUsd) && priceUsd > 0) {
+                acc.weightedPriceTotal += priceUsd * tokenLiquidity;
+                acc.priceWeight += tokenLiquidity;
+            }
+        }
+        if (Number.isFinite(liquidityUsd) && liquidityUsd > 0) {
+            acc.liquidityUsd += liquidityUsd;
+        }
+        return acc;
+    }, { tokenLiquidity: 0, liquidityUsd: 0, weightedPriceTotal: 0, priceWeight: 0, pairCount: 0 });
+}
+
 export const SafefyScanService = {
     async getHealth() {
         return fetchJson<{ configured: boolean; cacheEntries: number }>('/api/insightx/health');
@@ -239,44 +289,38 @@ export const SafefyScanService = {
         return request;
     },
 
-    async getLiveTokenLiquidity(network: InsightXNetwork, address: string): Promise<LiveTokenLiquidity | null> {
-        const chainId = DEXSCREENER_CHAIN_IDS[network];
-        if (!chainId) return null;
+    async detectTokenNetwork(address: string): Promise<DetectedTokenNetwork | null> {
+        const value = address.trim();
+        if (!value) return null;
+        if (/^0x[a-fA-F0-9]{40}$/.test(value)) {
+            const candidates = await Promise.all(EVM_NETWORKS.map(async (network) => {
+                const pairs = await getDexScreenerTokenPairs(network, value);
+                const totals = summarizeDexScreenerPairs(pairs, value);
+                return { network, ...totals };
+            }));
+            const best = candidates
+                .filter((item) => item.pairCount > 0 || item.liquidityUsd > 0)
+                .sort((a, b) => b.liquidityUsd - a.liquidityUsd || b.pairCount - a.pairCount)[0];
 
-        const response = await fetch(`https://api.dexscreener.com/token-pairs/v1/${encodeURIComponent(chainId)}/${encodeURIComponent(address.trim())}`);
-        if (!response.ok) {
-            throw new Error(`Live liquidity request failed with status ${response.status}.`);
+            return best
+                ? { network: best.network, confidence: best.liquidityUsd > 0 ? 'high' : 'medium', source: 'DexScreener' }
+                : { network: 'eth', confidence: 'low', source: 'Address format' };
         }
 
-        const pairs = await response.json().catch(() => []);
-        if (!Array.isArray(pairs)) return null;
+        if (/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(value)) {
+            return { network: 'sol', confidence: 'medium', source: 'Address format' };
+        }
 
-        const normalizedAddress = address.trim().toLowerCase();
-        const totals = pairs.reduce((acc, pair: any) => {
-            const liquidity = pair?.liquidity || {};
-            const liquidityUsd = Number(liquidity.usd);
-            const priceUsd = Number(pair?.priceUsd);
-            const baseAddress = String(pair?.baseToken?.address || '').toLowerCase();
-            const quoteAddress = String(pair?.quoteToken?.address || '').toLowerCase();
-            const tokenLiquidity = baseAddress === normalizedAddress
-                ? Number(liquidity.base)
-                : quoteAddress === normalizedAddress
-                    ? Number(liquidity.quote)
-                    : NaN;
+        if (value.length > 44) {
+            return { network: 'sui', confidence: 'low', source: 'Address format' };
+        }
 
-            if (Number.isFinite(tokenLiquidity) && tokenLiquidity > 0) {
-                acc.tokenLiquidity += tokenLiquidity;
-                acc.pairCount += 1;
-                if (Number.isFinite(priceUsd) && priceUsd > 0) {
-                    acc.weightedPriceTotal += priceUsd * tokenLiquidity;
-                    acc.priceWeight += tokenLiquidity;
-                }
-            }
-            if (Number.isFinite(liquidityUsd) && liquidityUsd > 0) {
-                acc.liquidityUsd += liquidityUsd;
-            }
-            return acc;
-        }, { tokenLiquidity: 0, liquidityUsd: 0, weightedPriceTotal: 0, priceWeight: 0, pairCount: 0 });
+        return null;
+    },
+
+    async getLiveTokenLiquidity(network: InsightXNetwork, address: string): Promise<LiveTokenLiquidity | null> {
+        const pairs = await getDexScreenerTokenPairs(network, address);
+        const totals = summarizeDexScreenerPairs(pairs, address);
 
         if (totals.tokenLiquidity <= 0 && totals.liquidityUsd <= 0) return null;
 

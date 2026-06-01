@@ -29,6 +29,7 @@ import {
     type InsightXScannerResponse,
     type InsightXSnipers,
     type InsightXWalletEntry,
+    type DetectedTokenNetwork,
     type LiveTokenLiquidity,
     type SafefyScanReport
 } from '../services/SafefyScanService';
@@ -1265,7 +1266,7 @@ const AtlasPanel: React.FC<{ atlas: any; timestamps: unknown; clusters: any }> =
         <Card>
             <SectionHeader
                 icon={<Network size={19} />}
-                title="Atlas Holder Graph"
+                title="Holder's Graph"
                 eyebrow={tokenLabel || 'Snapshots and relationships'}
                 action={snapshotTime ? <span className="rounded-full border border-border bg-card-hover px-3 py-1.5 text-xs font-bold text-text-medium">Snapshot {toDate(snapshotTime)}</span> : null}
             />
@@ -1425,7 +1426,7 @@ const AtlasPanel: React.FC<{ atlas: any; timestamps: unknown; clusters: any }> =
                 <div className="min-w-0 overflow-hidden rounded-2xl border border-border bg-card-hover/30" onClick={() => setSelectedNodeId(null)}>
                     <div className="border-b border-border px-4 py-4">
                         <div className="text-xs font-black uppercase tracking-[0.16em] text-text-dark">Address List</div>
-                        <div className="mt-1 text-sm font-semibold text-text-medium">Ranked Atlas holders and cluster colors</div>
+                        <div className="mt-1 text-sm font-semibold text-text-medium">Ranked holders and cluster colors</div>
                         <label className="mt-4 flex h-11 items-center gap-2 rounded-xl border border-border bg-card px-3 text-sm text-text-medium">
                             <Search size={16} />
                             <input
@@ -1495,6 +1496,8 @@ export const SafefyScan: React.FC = () => {
     const [liveLiquidity, setLiveLiquidity] = useState<LiveTokenLiquidity | null>(null);
     const [liquidityLoading, setLiquidityLoading] = useState(false);
     const [liquidityError, setLiquidityError] = useState<string | null>(null);
+    const [detectedNetwork, setDetectedNetwork] = useState<DetectedTokenNetwork | null>(null);
+    const [detectingNetwork, setDetectingNetwork] = useState(false);
 
     const normalizedAddress = address.trim();
     const addressSupported = !normalizedAddress || isLikelyInsightXAddress(normalizedAddress, network);
@@ -1515,6 +1518,45 @@ export const SafefyScan: React.FC = () => {
     const clusterSupplyUsd = clusterSupplyBalance !== null && liveLiquidity?.tokenPriceUsd
         ? clusterSupplyBalance * liveLiquidity.tokenPriceUsd
         : null;
+    useEffect(() => {
+        if (!normalizedAddress || loading) {
+            setDetectedNetwork(null);
+            setDetectingNetwork(false);
+            return;
+        }
+        const canDetect = /^0x[a-fA-F0-9]{40}$/.test(normalizedAddress)
+            || /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(normalizedAddress)
+            || normalizedAddress.length > 44;
+        if (!canDetect) {
+            setDetectedNetwork(null);
+            setDetectingNetwork(false);
+            return;
+        }
+
+        let cancelled = false;
+        const timer = window.setTimeout(() => {
+            setDetectingNetwork(true);
+            SafefyScanService.detectTokenNetwork(normalizedAddress)
+                .then((detection) => {
+                    if (cancelled) return;
+                    setDetectedNetwork(detection);
+                    if (detection && detection.network !== network) {
+                        setNetwork(detection.network);
+                    }
+                })
+                .catch(() => {
+                    if (!cancelled) setDetectedNetwork(null);
+                })
+                .finally(() => {
+                    if (!cancelled) setDetectingNetwork(false);
+                });
+        }, 350);
+
+        return () => {
+            cancelled = true;
+            window.clearTimeout(timer);
+        };
+    }, [normalizedAddress, loading]);
 
     useEffect(() => {
         if (!report) {
@@ -1568,6 +1610,8 @@ export const SafefyScan: React.FC = () => {
         setError(null);
         setLiveLiquidity(null);
         setLiquidityError(null);
+        setDetectedNetwork(null);
+        setDetectingNetwork(false);
         setAddress('');
         setNetwork('sol');
     };
@@ -1777,7 +1821,9 @@ export const SafefyScan: React.FC = () => {
                     </div>
 
                     <LiquidityAndHoldersPanel scanner={scanner} labels={labelsByAddress} />
-                    <ManipulationPanel overview={overview} snipers={snipers} bundlers={bundlers} insiders={insiders} labels={labelsByAddress} totalSupply={tokenTotalSupply} tokenPriceUsd={liveLiquidity?.tokenPriceUsd} />
+                    {report.network === 'sol' ? (
+                        <ManipulationPanel overview={overview} snipers={snipers} bundlers={bundlers} insiders={insiders} labels={labelsByAddress} totalSupply={tokenTotalSupply} tokenPriceUsd={liveLiquidity?.tokenPriceUsd} />
+                    ) : null}
                     <ClusterPanel clusters={clustersData} labels={labelsByAddress} totalSupply={tokenTotalSupply} />
                     <AtlasPanel atlas={atlas} timestamps={atlasTimestamps} clusters={clustersData} />
                 </>

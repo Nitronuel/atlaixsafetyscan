@@ -11,6 +11,18 @@ const INSIGHTX_TIMEOUT_MS = 18_000;
 const INSIGHTX_DEFAULT_CACHE_TTL_MS = 3 * 60_000;
 const INSIGHTX_LABEL_CACHE_TTL_MS = 24 * 60 * 60_000;
 const INSIGHTX_SUPPORTED_NETWORKS = new Set(['sol', 'eth', 'base', 'bsc', 'monad', 'xlayer', 'abs', 'sui']);
+const INSIGHTX_ENDPOINT_NETWORKS: Record<string, Set<string>> = {
+  scanner: new Set(['sol', 'eth', 'base', 'bsc']),
+  overview: new Set(['sol', 'eth', 'base', 'bsc']),
+  distribution: new Set(['sol', 'eth', 'base', 'bsc']),
+  clusters: new Set(['sol', 'eth', 'base', 'bsc', 'monad', 'xlayer', 'abs']),
+  snipers: new Set(['sol']),
+  bundlers: new Set(['sol']),
+  insiders: new Set(['sol']),
+  atlasLatest: new Set(['sol', 'eth', 'base', 'bsc', 'monad', 'xlayer', 'abs']),
+  atlasTimestamps: new Set(['sol', 'eth', 'base', 'bsc', 'monad', 'xlayer', 'abs']),
+  labels: new Set(['sol', 'eth', 'base', 'bsc', 'monad', 'xlayer', 'abs'])
+};
 const insightXCache = new Map<string, { expiresAt: number; value: unknown; cachedAt: string }>();
 
 type InsightXEndpointStatus = 'available' | 'unsupported' | 'missing' | 'error' | 'rate_limited' | 'not_configured';
@@ -30,6 +42,8 @@ type InsightXFetchOptions = {
   path: string;
   params?: Record<string, string | number | null | undefined>;
   cacheKey: string;
+  endpointKey?: string;
+  network?: string;
   ttlMs?: number;
 };
 
@@ -155,6 +169,15 @@ function delay(ms: number) {
 
 async function fetchInsightX(options: InsightXFetchOptions): Promise<InsightXEndpointResult> {
   const fetchedAt = new Date().toISOString();
+  if (options.endpointKey && options.network && !INSIGHTX_ENDPOINT_NETWORKS[options.endpointKey]?.has(options.network)) {
+    return {
+      status: 'unsupported',
+      data: null,
+      error: `${options.endpointKey} is not supported on ${options.network}.`,
+      fetchedAt
+    };
+  }
+
   const apiKey = getInsightXApiKey();
   if (!apiKey) {
     return {
@@ -286,15 +309,15 @@ async function buildInsightXReport(network: string, address: string) {
   const cacheBase = `${network}:${address.toLowerCase()}`;
 
   const requests: Partial<Record<InsightXReportEndpointKey, Promise<InsightXEndpointResult>>> = {
-    scanner: fetchInsightX({ path: `/scanner/v1/tokens/${encodedNetwork}/${encodedAddress}`, cacheKey: `scanner:${cacheBase}` }),
-    overview: fetchInsightX({ path: `/dex-metrics/v1/${encodedNetwork}/${encodedAddress}`, cacheKey: `overview:${cacheBase}` }),
-    distribution: fetchInsightX({ path: `/dex-metrics/v1/${encodedNetwork}/${encodedAddress}/distribution`, cacheKey: `distribution:${cacheBase}` }),
-    clusters: fetchInsightX({ path: `/dex-metrics/v1/${encodedNetwork}/${encodedAddress}/clusters`, cacheKey: `clusters:${cacheBase}` }),
-    snipers: fetchInsightX({ path: `/dex-metrics/v1/${encodedNetwork}/${encodedAddress}/snipers`, cacheKey: `snipers:${cacheBase}` }),
-    bundlers: fetchInsightX({ path: `/dex-metrics/v1/${encodedNetwork}/${encodedAddress}/bundlers`, cacheKey: `bundlers:${cacheBase}` }),
-    insiders: fetchInsightX({ path: `/dex-metrics/v1/${encodedNetwork}/${encodedAddress}/insiders`, cacheKey: `insiders:${cacheBase}` }),
-    atlasLatest: fetchInsightX({ path: `/atlas/v1/${encodedNetwork}/${encodedAddress}/snapshots/latest`, cacheKey: `atlas-latest:${cacheBase}` }),
-    atlasTimestamps: fetchInsightX({ path: `/atlas/v1/${encodedNetwork}/${encodedAddress}/snapshots`, cacheKey: `atlas-timestamps:${cacheBase}` })
+    scanner: fetchInsightX({ path: `/scanner/v1/tokens/${encodedNetwork}/${encodedAddress}`, cacheKey: `scanner:${cacheBase}`, endpointKey: 'scanner', network }),
+    overview: fetchInsightX({ path: `/dex-metrics/v1/${encodedNetwork}/${encodedAddress}`, cacheKey: `overview:${cacheBase}`, endpointKey: 'overview', network }),
+    distribution: fetchInsightX({ path: `/dex-metrics/v1/${encodedNetwork}/${encodedAddress}/distribution`, cacheKey: `distribution:${cacheBase}`, endpointKey: 'distribution', network }),
+    clusters: fetchInsightX({ path: `/dex-metrics/v1/${encodedNetwork}/${encodedAddress}/clusters`, cacheKey: `clusters:${cacheBase}`, endpointKey: 'clusters', network }),
+    snipers: fetchInsightX({ path: `/dex-metrics/v1/${encodedNetwork}/${encodedAddress}/snipers`, cacheKey: `snipers:${cacheBase}`, endpointKey: 'snipers', network }),
+    bundlers: fetchInsightX({ path: `/dex-metrics/v1/${encodedNetwork}/${encodedAddress}/bundlers`, cacheKey: `bundlers:${cacheBase}`, endpointKey: 'bundlers', network }),
+    insiders: fetchInsightX({ path: `/dex-metrics/v1/${encodedNetwork}/${encodedAddress}/insiders`, cacheKey: `insiders:${cacheBase}`, endpointKey: 'insiders', network }),
+    atlasLatest: fetchInsightX({ path: `/atlas/v1/${encodedNetwork}/${encodedAddress}/snapshots/latest`, cacheKey: `atlas-latest:${cacheBase}`, endpointKey: 'atlasLatest', network }),
+    atlasTimestamps: fetchInsightX({ path: `/atlas/v1/${encodedNetwork}/${encodedAddress}/snapshots`, cacheKey: `atlas-timestamps:${cacheBase}`, endpointKey: 'atlasTimestamps', network })
   };
 
   const entries = await Promise.all(Object.entries(requests).map(async ([key, promise]) => [key, await promise] as const));
@@ -307,6 +330,8 @@ async function buildInsightXReport(network: string, address: string) {
   endpoints.labels = await fetchInsightX({
     path: `/labels/v1/${encodedNetwork}/${encodeURIComponent([...addresses].join(','))}`,
     cacheKey: `labels:${network}:${[...addresses].sort().join(',').toLowerCase()}`,
+    endpointKey: 'labels',
+    network,
     ttlMs: INSIGHTX_LABEL_CACHE_TTL_MS
   });
 
@@ -356,31 +381,33 @@ async function handleInsightXRequest(response: ServerResponse, requestUrl: URL) 
   let result: InsightXEndpointResult;
 
   if (path === '/api/insightx/scanner') {
-    result = await fetchInsightX({ path: `/scanner/v1/tokens/${encodedNetwork}/${encodedAddress}`, cacheKey: `scanner:${cacheBase}` });
+    result = await fetchInsightX({ path: `/scanner/v1/tokens/${encodedNetwork}/${encodedAddress}`, cacheKey: `scanner:${cacheBase}`, endpointKey: 'scanner', network });
   } else if (path === '/api/insightx/dex-metrics') {
-    result = await fetchInsightX({ path: `/dex-metrics/v1/${encodedNetwork}/${encodedAddress}`, cacheKey: `overview:${cacheBase}` });
+    result = await fetchInsightX({ path: `/dex-metrics/v1/${encodedNetwork}/${encodedAddress}`, cacheKey: `overview:${cacheBase}`, endpointKey: 'overview', network });
   } else if (path === '/api/insightx/distribution') {
-    result = await fetchInsightX({ path: `/dex-metrics/v1/${encodedNetwork}/${encodedAddress}/distribution`, cacheKey: `distribution:${cacheBase}` });
+    result = await fetchInsightX({ path: `/dex-metrics/v1/${encodedNetwork}/${encodedAddress}/distribution`, cacheKey: `distribution:${cacheBase}`, endpointKey: 'distribution', network });
   } else if (path === '/api/insightx/clusters') {
-    result = await fetchInsightX({ path: `/dex-metrics/v1/${encodedNetwork}/${encodedAddress}/clusters`, cacheKey: `clusters:${cacheBase}` });
+    result = await fetchInsightX({ path: `/dex-metrics/v1/${encodedNetwork}/${encodedAddress}/clusters`, cacheKey: `clusters:${cacheBase}`, endpointKey: 'clusters', network });
   } else if (path === '/api/insightx/snipers') {
-    result = await fetchInsightX({ path: `/dex-metrics/v1/${encodedNetwork}/${encodedAddress}/snipers`, cacheKey: `snipers:${cacheBase}` });
+    result = await fetchInsightX({ path: `/dex-metrics/v1/${encodedNetwork}/${encodedAddress}/snipers`, cacheKey: `snipers:${cacheBase}`, endpointKey: 'snipers', network });
   } else if (path === '/api/insightx/bundlers') {
-    result = await fetchInsightX({ path: `/dex-metrics/v1/${encodedNetwork}/${encodedAddress}/bundlers`, cacheKey: `bundlers:${cacheBase}` });
+    result = await fetchInsightX({ path: `/dex-metrics/v1/${encodedNetwork}/${encodedAddress}/bundlers`, cacheKey: `bundlers:${cacheBase}`, endpointKey: 'bundlers', network });
   } else if (path === '/api/insightx/insiders') {
-    result = await fetchInsightX({ path: `/dex-metrics/v1/${encodedNetwork}/${encodedAddress}/insiders`, cacheKey: `insiders:${cacheBase}` });
+    result = await fetchInsightX({ path: `/dex-metrics/v1/${encodedNetwork}/${encodedAddress}/insiders`, cacheKey: `insiders:${cacheBase}`, endpointKey: 'insiders', network });
   } else if (path === '/api/insightx/atlas/latest') {
-    result = await fetchInsightX({ path: `/atlas/v1/${encodedNetwork}/${encodedAddress}/snapshots/latest`, cacheKey: `atlas-latest:${cacheBase}` });
+    result = await fetchInsightX({ path: `/atlas/v1/${encodedNetwork}/${encodedAddress}/snapshots/latest`, cacheKey: `atlas-latest:${cacheBase}`, endpointKey: 'atlasLatest', network });
   } else if (path === '/api/insightx/atlas/timestamps') {
-    result = await fetchInsightX({ path: `/atlas/v1/${encodedNetwork}/${encodedAddress}/snapshots`, cacheKey: `atlas-timestamps:${cacheBase}` });
+    result = await fetchInsightX({ path: `/atlas/v1/${encodedNetwork}/${encodedAddress}/snapshots`, cacheKey: `atlas-timestamps:${cacheBase}`, endpointKey: 'atlasTimestamps', network });
   } else if (path === '/api/insightx/atlas/snapshot') {
     const timestamp = requestUrl.searchParams.get('timestamp') || '';
-    result = await fetchInsightX({ path: `/atlas/v1/${encodedNetwork}/${encodedAddress}/snapshots/${encodeURIComponent(timestamp)}`, cacheKey: `atlas-snapshot:${cacheBase}:${timestamp}` });
+    result = await fetchInsightX({ path: `/atlas/v1/${encodedNetwork}/${encodedAddress}/snapshots/${encodeURIComponent(timestamp)}`, cacheKey: `atlas-snapshot:${cacheBase}:${timestamp}`, endpointKey: 'atlasLatest', network });
   } else if (path === '/api/insightx/labels') {
     const addresses = (requestUrl.searchParams.get('addresses') || address).split(',').map((item) => item.trim()).filter(Boolean).slice(0, 100);
     result = await fetchInsightX({
       path: `/labels/v1/${encodedNetwork}/${encodeURIComponent(addresses.join(','))}`,
       cacheKey: `labels:${network}:${addresses.sort().join(',').toLowerCase()}`,
+      endpointKey: 'labels',
+      network,
       ttlMs: INSIGHTX_LABEL_CACHE_TTL_MS
     });
   } else {
